@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clasificador de figuras – Domínguez Chávez Joselyn Jazmín – 24305015</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--tx:#1b1f24;--mu:#6b7280;--ac:#2563eb;--bd:#d9dde3}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--card:#1d2128;--tx:#e8eaed;--mu:#9aa3af;--ac:#60a5fa;--bd:#333a44}}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--tx);padding:16px}
+h1{font-size:20px;margin:0 0 4px}#st{color:var(--mu);font-size:13px;margin-bottom:12px}
+.bar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+input[type=file]{background:var(--card);border:1px dashed var(--bd);padding:10px;border-radius:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px}
+.card h2{font-size:13px;margin:0 0 8px;color:var(--mu);font-weight:600}
+canvas{width:100%;height:auto;background:#fff;border-radius:6px;display:block}
+#big{font-size:30px;font-weight:700;color:var(--ac);text-transform:capitalize}
+.row{display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0}
+.row b{width:78px;font-weight:500}.tr{flex:1;height:8px;background:var(--bd);border-radius:4px;overflow:hidden}
+.tr i{display:block;height:100%;background:var(--ac)}
+pre{white-space:pre-wrap;font-size:12px;color:var(--mu);margin:8px 0 0}
+</style></head><body>
+<h1>Clasificador de figuras geométricas (círculo · cuadrado · triángulo · pentágono · estrella · NULL)</h1><div style="font-size:13px;color:var(--mu);margin-bottom:6px">Domínguez Chávez Joselyn Jazmín · Matrícula 24305015 · Profesor: Javier García Lara</div>
+<div id="st">Cargando OpenCV.js (requiere internet la primera vez)…</div>
+<div class="bar"><input type="file" id="f" accept="image/*" disabled></div>
+<div class="grid">
+ <div class="card"><h2>1. Imagen original</h2><canvas id="c0"></canvas></div>
+ <div class="card"><h2>2. Rasgos detectados (contorno · casco convexo · rectángulo mínimo · vértices)</h2><canvas id="c1"></canvas></div>
+ <div class="card"><h2>3. Grafo representativo (nodo = vértice, etiqueta = peso de la arista en px)</h2><canvas id="c2" width="500" height="400"></canvas></div>
+ <div class="card"><h2>4. Figura identificada</h2><div id="big">—</div><div id="conf" style="margin-bottom:8px;color:var(--mu)">Confianza: —</div><div id="bars"></div><pre id="log"></pre></div>
+</div>
+<script>
+/* ---------- Base de conocimiento (prototipos ideales): 5 figuras + NULL ---------- */
+const UMBRAL_NULL=.35;
+const PROTOS={
+ circulo:{n:10,c:.90,s:.99,a:1,many:1}, triangulo:{n:3,c:.56,s:.99,a:null},
+ cuadrado:{n:4,c:.79,s:.99,a:1}, pentagono:{n:5,c:.79,s:.99,a:null},
+ estrella:{n:10,c:.27,s:.52,a:null,nt:2}};
+const $=id=>document.getElementById(id);
+
+/* Qué tan bien encajan los rasgos f en el prototipo p (0..1) */
+function puntuar(f,p){
+ const dn=p.many?Math.max(0,7-f.n):(f.n-p.n)/(p.nt||.5);
+ const tc=p.many?.06:.10;
+ let d=dn**2+((f.c-p.c)/tc)**2+((f.s-p.s)/.15)**2;
+ if(p.a!=null)d+=((f.a-p.a)/.15)**2;
+ return Math.exp(-d/2);}
+
+/* Toma de decisiones + búsqueda: evalúa todas las hipótesis y elige la mejor */
+function clasificar(f,log){
+ const sc={};for(const k in PROTOS)sc[k]=puntuar(f,PROTOS[k]);
+ const o=Object.entries(sc).sort((a,b)=>b[1]-a[1]);
+ if(f.n===3&&f.s>.9)log.push('Regla directa: 3 vértices + convexo → triangulo');
+ if(o[0][1]<UMBRAL_NULL){log.push(`Mejor puntaje ${o[0][1].toFixed(2)} < ${UMBRAL_NULL} → NULL`);
+  return{nombre:'NULL',conf:o[0][1]*100,sc};}
+ const conf=o[0][1]*(o[0][1]/(o[0][1]+o[1][1]+1e-9))*100;
+ log.push(`Mejor hipótesis: ${o[0][0]} (${o[0][1].toFixed(2)}) vs 2da ${o[1][0]} (${o[1][1].toFixed(2)})`);
+ return{nombre:o[0][0],conf,sc};}
+
+function analizar(img){
+ const log=[],W=Math.min(500,img.width),H=Math.round(img.height*W/img.width);
+ const c0=$('c0');c0.width=W;c0.height=H;c0.getContext('2d').drawImage(img,0,0,W,H);
+ const src=cv.imread(c0),gray=new cv.Mat(),th=new cv.Mat(),K=cv.Mat.ones(3,3,cv.CV_8U);
+ cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
+ cv.GaussianBlur(gray,gray,new cv.Size(5,5),0);
+ cv.threshold(gray,th,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
+ const d=th.data,w=th.cols,h=th.rows;let s=0,n=0;
+ for(let x=0;x<w;x++){s+=d[x]+d[(h-1)*w+x];n+=2}
+ for(let y=0;y<h;y++){s+=d[y*w]+d[y*w+w-1];n+=2}
+ if(s/n>127){cv.bitwise_not(th,th);log.push('Fondo claro detectado → imagen invertida')}
+ cv.morphologyEx(th,th,cv.MORPH_OPEN,K);
+ const cs=new cv.MatVector(),hi=new cv.Mat();
+ cv.findContours(th,cs,hi,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+ let cnt=null,ba=0;
+ for(let i=0;i<cs.size();i++){const a=cv.contourArea(cs.get(i));if(a>ba){ba=a;cnt=cs.get(i)}}
+ cv.imshow('c1',th);
+ if(!cnt||ba<.002*W*H){$('big').textContent='NULL';$('conf').textContent='Confianza: 100%';$('bars').innerHTML='';$('log').textContent='Sin contornos → NULL';{const q=$('c2').getContext('2d');q.fillStyle='#fff';q.fillRect(0,0,500,400);q.fillStyle='#000';q.font='20px sans-serif';q.fillText('NULL: sin grafo',170,200)}
+  [src,gray,th,K,cs,hi].forEach(m=>m.delete());return}
+ /* Extracción de rasgos */
+ const per=cv.arcLength(cnt,true),ap=new cv.Mat(),hull=new cv.Mat();
+ cv.approxPolyDP(cnt,ap,.02*per,true);cv.convexHull(cnt,hull,false,true);
+ const r=cv.minAreaRect(cnt);
+ const f={n:ap.rows,c:4*Math.PI*ba/(per*per),s:ba/Math.max(cv.contourArea(hull),1e-6),
+  a:Math.min(r.size.width,r.size.height)/Math.max(r.size.width,r.size.height,1e-6)};
+ log.unshift(`Rasgos → vértices=${f.n} · circularidad=${f.c.toFixed(3)} · solidez=${f.s.toFixed(3)} · aspecto=${f.a.toFixed(3)}`);
+ const res=clasificar(f,log);
+ /* Panel 2: capas sobre la imagen binaria */
+ const g=$('c1').getContext('2d'),P=m=>{const a=[];for(let i=0;i<m.data32S.length;i+=2)a.push([m.data32S[i],m.data32S[i+1]]);return a};
+ const poly=(pts,col,wd)=>{g.beginPath();pts.forEach((p,i)=>i?g.lineTo(...p):g.moveTo(...p));g.closePath();g.strokeStyle=col;g.lineWidth=wd;g.stroke()};
+ poly(P(cnt),'#ffc400',2);poly(P(hull),'#00b050',1.5);
+ const box=cv.RotatedRect.points(r);poly(box.map(p=>[p.x,p.y]),'#3b82f6',1.5);
+ const V=P(ap);g.fillStyle='#e11d48';V.forEach(p=>{g.beginPath();g.arc(p[0],p[1],5,0,7);g.fill()});
+ /* Panel 3: grafo ciclo. Nodo de inicio = vértice más alto; peso de arista = longitud en px */
+ const c2=$('c2').getContext('2d'),GW=500,GH=400;c2.fillStyle='#fff';c2.fillRect(0,0,GW,GH);
+ let i0=0;V.forEach((p,i)=>{if(p[1]<V[i0][1]||(p[1]===V[i0][1]&&p[0]<V[i0][0]))i0=i});
+ const VV=V.map((_,i)=>V[(i+i0)%V.length]),m=VV.length;
+ const xs=VV.map(p=>p[0]),ys=VV.map(p=>p[1]),mx=Math.min(...xs),my=Math.min(...ys),k=(GH-120)/Math.max(Math.max(...xs)-mx,Math.max(...ys)-my,1);
+ const N=VV.map(p=>[(p[0]-mx)*k+(GW-(Math.max(...xs)-mx)*k)/2,(p[1]-my)*k+60]),pesos=[];
+ c2.font='13px sans-serif';
+ N.forEach((a,i)=>{const b=N[(i+1)%m],w=Math.hypot(VV[(i+1)%m][0]-VV[i][0],VV[(i+1)%m][1]-VV[i][1]);pesos.push(`v${i}–v${(i+1)%m} = ${w.toFixed(0)} px`);
+  c2.beginPath();c2.moveTo(...a);c2.lineTo(...b);c2.strokeStyle='#777';c2.lineWidth=2;c2.stroke();
+  c2.fillStyle='#a00000';c2.fillText(w.toFixed(0),(a[0]+b[0])/2+5,(a[1]+b[1])/2-5);});
+ N.forEach((a,i)=>{c2.fillStyle=i?'#e11d48':'#15803d';c2.beginPath();c2.arc(a[0],a[1],12,0,7);c2.fill();
+  c2.fillStyle='#fff';c2.font='11px sans-serif';c2.fillText('v'+i,a[0]-7,a[1]+4)});
+ c2.fillStyle='#15803d';c2.font='bold 13px sans-serif';c2.fillText('INICIO',N[0][0]-22,N[0][1]-18);
+ log.push('Nodo de inicio: v0 | Aristas: '+pesos.join(', '));
+ /* Panel 4: resultado */
+ $('big').textContent=res.nombre;$('conf').textContent='Confianza: '+res.conf.toFixed(1)+'%';
+ $('bars').innerHTML=Object.entries(res.sc).sort((a,b)=>b[1]-a[1]).map(([k,v])=>
+  `<div class="row"><b>${k}</b><div class="tr"><i style="width:${v*100}%"></i></div>${(v*100).toFixed(0)}%</div>`).join('');
+ $('log').textContent=log.join('\n');
+ [src,gray,th,K,cs,hi,ap,hull].forEach(m=>m.delete());}
+
+/* ---------- Carga de OpenCV.js y de la imagen del PC ---------- */
+function listo(){$('st').textContent='OpenCV.js listo. Elige una imagen de tu PC.';$('f').disabled=false}
+function iniciar(){let c=window.cv;
+ if(c instanceof Promise)c.then(m=>{window.cv=m;listo()});
+ else if(c&&c.Mat)listo();else c.onRuntimeInitialized=listo;}
+const urls=['https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.9.0-release.1/dist/opencv.js','https://docs.opencv.org/4.9.0/opencv.js'];
+(function cargar(i){if(i>=urls.length){$('st').textContent='No se pudo cargar OpenCV.js: revisa tu conexión.';return}
+ const s=document.createElement('script');s.src=urls[i];s.onload=iniciar;s.onerror=()=>cargar(i+1);document.head.appendChild(s)})(0);
+$('f').onchange=e=>{const fl=e.target.files[0];if(!fl)return;const im=new Image();
+ im.onload=()=>analizar(im);im.src=URL.createObjectURL(fl)};
+</script></body></html>
